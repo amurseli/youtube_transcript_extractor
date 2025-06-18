@@ -37,17 +37,16 @@ def get_proxy_config(exclude_proxies=None):
     if os.getenv('USE_PROXY', 'False') != 'True':
         return None
     
+    # Si USE_PROXY=True, DEBE usar proxies o fallar
     username = os.getenv('WEBSHARE_PROXY_USERNAME')
     password = os.getenv('WEBSHARE_PROXY_PASSWORD')
     
     if not all([username, password]):
-        print("Warning: Proxy enabled but credentials incomplete")
-        return None
+        raise ValueError("USE_PROXY=True but proxy credentials are missing. Set WEBSHARE_PROXY_USERNAME and WEBSHARE_PROXY_PASSWORD")
     
     all_proxies = get_all_proxies()
     if not all_proxies:
-        print("Warning: No proxies found in WEBSHARE_PROXY_LIST")
-        return None
+        raise ValueError("USE_PROXY=True but no proxies found in WEBSHARE_PROXY_LIST")
     
     if exclude_proxies:
         available_proxies = [p for p in all_proxies if p not in exclude_proxies]
@@ -55,8 +54,7 @@ def get_proxy_config(exclude_proxies=None):
         available_proxies = all_proxies
     
     if not available_proxies:
-        print("Warning: All proxies have been excluded")
-        return None
+        raise ValueError("All proxies have been excluded/failed")
     
     selected_proxy = random.choice(available_proxies)
     print(f"Selected proxy: {selected_proxy}")
@@ -80,9 +78,15 @@ def get_available_languages(video_url):
     try:
         proxies = None
         if use_proxy:
-            proxy_result = get_proxy_config()
-            if proxy_result:
-                proxies, _ = proxy_result
+            try:
+                proxy_result = get_proxy_config()
+                if proxy_result:
+                    proxies, _ = proxy_result
+            except ValueError as e:
+                return {
+                    'error': 'Proxy configuration error',
+                    'details': str(e)
+                }
         
         transcript_list = YouTubeTranscriptApi.list_transcripts(video_id, proxies=proxies)
         
@@ -102,7 +106,8 @@ def get_available_languages(video_url):
         return {
             'video_id': video_id,
             'languages': languages,
-            'total': len(languages)
+            'total': len(languages),
+            'proxy_used': bool(proxies)
         }
         
     except TranscriptsDisabled:
@@ -132,14 +137,21 @@ def get_subtitles(video_url, language_code=None):
     for attempt in range(max_retries):
         try:
             if use_proxy:
-                proxy_result = get_proxy_config(exclude_proxies=failed_proxies)
-                if proxy_result:
-                    proxies, current_proxy = proxy_result
-                    print(f"Attempt {attempt + 1} with proxy {current_proxy}")
-                else:
-                    proxies = None
-                    current_proxy = None
-                    print(f"Attempt {attempt + 1} - No proxy available")
+                try:
+                    proxy_result = get_proxy_config(exclude_proxies=failed_proxies)
+                    if proxy_result:
+                        proxies, current_proxy = proxy_result
+                        print(f"Attempt {attempt + 1} with proxy {current_proxy}")
+                    else:
+                        # Esto no debería pasar ahora, pero por si acaso
+                        proxies = None
+                        current_proxy = None
+                except ValueError as e:
+                    return {
+                        'error': 'Proxy configuration error',
+                        'details': str(e),
+                        'attempts': attempt + 1
+                    }
             else:
                 proxies = None
                 current_proxy = None
@@ -202,6 +214,7 @@ def get_subtitles(video_url, language_code=None):
             return {'error': 'Subtitles are disabled for this video'}
                 
         except NoTranscriptFound:
+            # Si se especificó un idioma, dar más info
             if language_code:
                 return {
                     'error': f'No transcript found for language code: {language_code}',
