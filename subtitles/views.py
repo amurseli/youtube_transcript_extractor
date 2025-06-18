@@ -1,7 +1,7 @@
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
-from .services import get_subtitles, extract_video_id
+from .services import get_subtitles, extract_video_id, get_available_languages
 
 @api_view(['GET'])
 def health_check(request):
@@ -18,7 +18,8 @@ def test_video_id(request):
     })
 
 @api_view(['POST'])
-def get_subtitles_view(request):
+def get_languages_view(request):
+    """Obtiene todos los idiomas disponibles para un video"""
     video_url = request.data.get('url')
     
     if not video_url:
@@ -27,8 +28,27 @@ def get_subtitles_view(request):
             status=status.HTTP_400_BAD_REQUEST
         )
     
-    # Llamar al servicio
-    result = get_subtitles(video_url)
+    result = get_available_languages(video_url)
+    
+    if 'error' in result:
+        return Response(result, status=status.HTTP_400_BAD_REQUEST)
+    
+    return Response(result)
+
+@api_view(['POST'])
+def get_subtitles_view(request):
+    """Obtiene los subtítulos en el idioma especificado"""
+    video_url = request.data.get('url')
+    language_code = request.data.get('language_code')  # Opcional
+    
+    if not video_url:
+        return Response(
+            {'error': 'URL is required'}, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Llamar al servicio con el código de idioma si se proporciona
+    result = get_subtitles(video_url, language_code)
     
     # Si hay error, devolver 400
     if 'error' in result:
