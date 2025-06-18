@@ -3,7 +3,6 @@ from youtube_transcript_api._errors import (
     TranscriptsDisabled,
     NoTranscriptFound,
     VideoUnavailable,
-    TooManyRequests,
     YouTubeRequestFailed
 )
 import re
@@ -82,22 +81,30 @@ def get_subtitles(video_url):
     if not video_id:
         return {'error': 'Invalid YouTube URL'}
     
+    # Verificar configuración de proxy
+    use_proxy = os.getenv('USE_PROXY', 'False') == 'True'
+    print(f"USE_PROXY setting: {os.getenv('USE_PROXY')} -> using proxy: {use_proxy}")
+    
     # Lista de proxies que han fallado
     failed_proxies = []
-    max_retries = 3
+    max_retries = 3 if use_proxy else 1  # Solo 1 intento sin proxy
     
     for attempt in range(max_retries):
         try:
-            # Obtener configuración de proxy
-            proxy_result = get_proxy_config(exclude_proxies=failed_proxies)
-            
-            if proxy_result:
-                proxies, current_proxy = proxy_result
-                print(f"Attempt {attempt + 1} with proxy {current_proxy}")
+            # Obtener configuración de proxy solo si está habilitado
+            if use_proxy:
+                proxy_result = get_proxy_config(exclude_proxies=failed_proxies)
+                if proxy_result:
+                    proxies, current_proxy = proxy_result
+                    print(f"Attempt {attempt + 1} with proxy {current_proxy}")
+                else:
+                    proxies = None
+                    current_proxy = None
+                    print(f"Attempt {attempt + 1} - No proxy available")
             else:
                 proxies = None
                 current_proxy = None
-                print(f"Attempt {attempt + 1} without proxy")
+                print(f"Attempt {attempt + 1} WITHOUT proxy (direct connection)")
             
             # Obtener transcripción
             transcript = YouTubeTranscriptApi.get_transcript(video_id, proxies=proxies)
@@ -110,23 +117,32 @@ def get_subtitles(video_url):
                 'attempts': attempt + 1
             }
             
-        except (TooManyRequests, YouTubeRequestFailed) as e:
-            print(f"Rate limited on attempt {attempt + 1}")
-            if current_proxy:
-                failed_proxies.append(current_proxy)
-                print(f"Marked proxy {current_proxy} as failed")
-            
-            # Esperar un poco antes de reintentar
-            if attempt < max_retries - 1:
-                wait_time = (attempt + 1) * 2  # 2, 4, 6 segundos
-                print(f"Waiting {wait_time} seconds before retry...")
-                time.sleep(wait_time)
+        except YouTubeRequestFailed as e:
+            # Verificar si es un error 429 (Too Many Requests)
+            if "429" in str(e) or "Too Many Requests" in str(e):
+                print(f"Rate limited on attempt {attempt + 1}")
+                if current_proxy:
+                    failed_proxies.append(current_proxy)
+                    print(f"Marked proxy {current_proxy} as failed")
+                
+                # Esperar un poco antes de reintentar
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 2  # 2, 4, 6 segundos
+                    print(f"Waiting {wait_time} seconds before retry...")
+                    time.sleep(wait_time)
+                else:
+                    return {
+                        'error': 'Too many failed attempts',
+                        'details': str(e),
+                        'proxy_used': bool(proxies),
+                        'attempts': attempt + 1
+                    }
             else:
+                # Otro tipo de error de YouTube
                 return {
-                    'error': 'Too many failed attempts',
+                    'error': f'YouTube request failed: {type(e).__name__}',
                     'details': str(e),
-                    'proxy_used': bool(proxies),
-                    'attempts': attempt + 1
+                    'proxy_used': bool(proxies)
                 }
                 
         except TranscriptsDisabled:
